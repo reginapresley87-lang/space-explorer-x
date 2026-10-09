@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#000">
+<link rel="icon" href="data:,">
+<title>Space Explorer X</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+  #se-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#9cf;font:16px system-ui;z-index:20;pointer-events:none;transition:opacity .6s}
+  #se-fb-card{position:fixed;left:12px;right:12px;top:12px;max-width:360px;padding:12px 14px;border-radius:14px;background:rgba(0,12,40,.82);
+    color:#fff;font:14px/1.35 system-ui;display:none;z-index:6}
+  #se-fb-card b{font-size:18px}
+  #se-credits-btn{display:none!important;position:fixed;left:50%;transform:translateX(-50%);bottom:max(6px,env(safe-area-inset-bottom));z-index:4;font:11px system-ui;color:#8ab;background:none;border:0;opacity:.75}
+  #se-credits-panel{position:fixed;left:12px;right:12px;bottom:34px;max-width:420px;margin:auto;padding:12px 14px;border-radius:12px;background:rgba(0,10,30,.92);color:#cde;font:12px/1.4 system-ui;z-index:12;display:none}
+  #se-credits-panel a{color:#8cf}
+  #se-err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;color:#fcc;font:16px system-ui}
+</style>
+</head>
+<body>
+<div id="se-loading">Loading the solar system…</div>
+<button id="se-credits-btn" aria-label="credits">ⓘ Credits</button>
+<div id="se-credits-panel"><b>Credits</b><br>
+Made by Nova Labs ⭐<br>
+Earth: NASA Visible Earth / Earth Observatory – Blue Marble Next Generation, Black Marble night lights, cloud map (public domain).<br>
+Sun, Mercury, Venus, Moon, Mars, Jupiter, Saturn &amp; rings, Uranus, Neptune, Milky Way: <a href="https://www.solarsystemscope.com/textures/" target="_blank" rel="noopener">Solar System Scope</a>, based on NASA imagery – <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.<br>
+Small moons, terrain and skies: procedural. Engine: three.js (MIT). Facts: NASA.</div>
+<div id="se-err">WebGL is not available on this device/browser.</div>
+<script src="astro/astro.js?v=1791548990"></script>
+<script type="module">
+const q = new URLSearchParams(location.search);
+let SE;
+try {
+  const { init } = await import('./scene/scene.js?v=1791548990');
+  SE = await init();
+} catch (e) {
+  console.error('[index] scene failed', e);
+  document.getElementById('se-err').style.display = 'flex';
+  throw e;
+}
+const loading = document.getElementById('se-loading');
+loading.style.opacity = 0; setTimeout(() => loading.remove(), 700);
+if (!q.has('nojoy')) SE.enableJoystick(true);
+
+// Load the UI half after window.SE exists. Fail gracefully if it is missing.
+function loadUI() {
+  if (q.has('noui')) return Promise.resolve(false);
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'ui/ui.css?v=1791548990';
+  css.onerror = () => { css.remove(); console.info('[index] ui/ui.css not found'); };
+  document.head.appendChild(css);
+  return new Promise(res => {
+    const s = document.createElement('script'); s.src = 'ui/ui.js?v=1791548990';
+    s.onload = () => res(true);
+    s.onerror = () => { s.remove(); console.info('[index] ui/ui.js not found - using built-in fallback controls'); res(false); };
+    document.head.appendChild(s);
+  });
+}
+const hasUI = await loadUI();
+const canvas = document.getElementById('se-canvas');
+
+// Tap-to-select (raycast via SE.pick). Always active; the UI card follows via the se:selected event.
+const downs = new Map();
+// Desktop mouse clicks / double-clicks are handled by scene/desktop.js (click = select, double-click = fly).
+const deskMouse = e => SE.isDesktop && (e.pointerType === 'mouse' || e.pointerType === 'pen');
+canvas.addEventListener('pointerdown', e => deskMouse(e) || downs.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), multi: downs.size > 0 }));
+canvas.addEventListener('pointerup', e => {
+  const d = downs.get(e.pointerId); downs.delete(e.pointerId);
+  if (!d || d.multi || downs.size || performance.now() - d.t > 350 || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10) return;
+  const name = SE.pick(e.clientX, e.clientY);
+  if (!name) return;
+  // Start the flight here; the UI's se:selected listener opens the card quietly, so fly.mp3 plays exactly once.
+  ghostUntil = performance.now() + 600;   // the card opens under the finger: swallow the browser's follow-up click
+  if (SE.selectPlanet(name) && typeof window.SE_SFX === 'function') window.SE_SFX('fly.mp3');
+});
+// Without this the synthetic click after a 3D tap lands on whatever card button just appeared under the
+// finger (e.g. tapping Jupiter in the overview selected Europa from Jupiter's moon list).
+let ghostUntil = 0;
+canvas.addEventListener('touchend', e => { if (performance.now() < ghostUntil) e.preventDefault(); }, { passive: false });
+addEventListener('click', e => { if (performance.now() < ghostUntil && e.target !== canvas) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+canvas.addEventListener('pointercancel', e => downs.delete(e.pointerId));
+
+if (!hasUI) installFallback();
+function installFallback() {
+  // drag = orbit, pinch / wheel = zoom, info card on selection
+  const pts = new Map(); let pinch = 0;
+  canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); });
+  canvas.addEventListener('pointermove', e => {
+    const o = pts.get(e.pointerId); if (!o) return;
+    if (pts.size === 1) SE.look(e.clientX - o.x, e.clientY - o.y);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) { const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch) SE.zoom((d - pinch) / 120); pinch = d; }
+  });
+  const up = e => { pts.delete(e.pointerId); pinch = 0; };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', e => { e.preventDefault(); SE.zoom(-e.deltaY / 500); }, { passive: false });
+  const card = document.createElement('div'); card.id = 'se-fb-card'; document.body.appendChild(card);
+  addEventListener('se:selected', e => {
+    const p = e.detail.body || {};
+    card.innerHTML = `<b>${p.name}</b><br>${p.type || ''}${p.radius_km ? ' · radius ' + p.radius_km.toLocaleString() + ' km' : ''}${p.moons != null ? ' · ' + p.moons + ' moons' : ''}<br><span style="opacity:.85">${p.fact || ''}</span>`;
+    card.style.display = 'block';
+  });
+}
+const cb = document.getElementById('se-credits-btn'), cp = document.getElementById('se-credits-panel');
+cb.onclick = () => { cp.style.display = cp.style.display === 'block' ? 'none' : 'block'; };
+cp.onclick = e => { if (e.target.tagName !== 'A') cp.style.display = 'none'; };
+window.__seIndex = { hasUI };
+</script>
+</body>
+</html>
