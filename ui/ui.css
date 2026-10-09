@@ -71,6 +71,7 @@
 }
 @media (pointer:fine) and (min-width:900px){
  #se-bar{box-sizing:border-box}
+ #se-menu{right:auto;left:160px}
  #se-keys{left:400px;right:360px;transform:none;text-align:center}
 }
 @media (orientation:landscape) and (max-height:500px){
